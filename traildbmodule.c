@@ -3,9 +3,16 @@
 #include <stdio.h>
 #include <stdint.h>
 
-struct sTrailDBEventTypeBase;
+// Structures for each type we have.
 
-typedef struct {
+// Forward declarations (some structures refer to each other).
+struct sTrailDBObject;
+struct sTrailDBCursorObject;
+struct sTrailDBTrailsIteratorObject;
+struct sTrailDBEventObject;
+struct sTrailDBFiltersAttrsObject;
+
+typedef struct sTrailDBObject {
     PyObject_HEAD
     tdb* t;
     uint64_t num_trails;
@@ -13,7 +20,7 @@ typedef struct {
     PyObject* field_attrs;
 } TrailDBObject;
 
-typedef struct {
+typedef struct sTrailDBCursorObject {
     PyObject_HEAD
     TrailDBObject* t;
     tdb_cursor* c;
@@ -22,12 +29,12 @@ typedef struct {
     int exhausted;
 } TrailDBCursorObject;
 
-typedef struct {
+typedef struct sTrailDBTrailsIteratorObject {
     PyObject_HEAD
     uint64_t trail_id;
     TrailDBObject* t;
     TrailDBCursorObject* c;
-} TrailDBTrailsIterator;
+} TrailDBTrailsIteratorObject;
 
 typedef struct sTrailDBEventObject {
     PyObject_HEAD
@@ -42,33 +49,65 @@ typedef struct sTrailDBFiltersAttrsObject {
     PyDictObject* attrs;
 } TrailDBFieldAttrsObject;
 
+// Declarations for all our functions.
+
+// init functions
 static int
-ctraildb_TrailDBCursor(PyObject *self_pobj, PyObject *args, PyObject* kwds);
-static PyObject *
-ctraildb_iter(PyObject* self_pobj);
-static PyObject *
-ctraildb_iternext(PyObject* self_pobj);
+ctraildb_TrailDB_init(PyObject *self_pobj, PyObject *args, PyObject* kwds);
+static int
+ctraildb_TrailDBCursor_init(PyObject *self_pobj, PyObject *args, PyObject* kwds);
+
+// del functions
+static void ctraildb_TrailDB_del(PyObject *self_pobj);
+static void ctraildb_TrailDBCursor_del(PyObject *self_pobj);
+static void ctraildb_TrailDBTrailsIterator_del(PyObject* self_pobj);
+static void ctraildb_TrailDBEvent_del(PyObject* self_pobj);
+static void ctraildb_TrailDBFieldAttrs_del(PyObject* self);
+
+// iterating
 static PyObject *
 ctraildb_TrailDBTrailsIterator_iter(PyObject* self_pobj);
 static PyObject *
 ctraildb_TrailDBTrailsIterator_iternext(PyObject* self_pobj);
-static void
-ctraildb_TrailDBTrailsIterator_del(PyObject* self_pobj);
-static void
-ctraildb_delCursor(PyObject *self_pobj);
 static PyObject *
-ctraildb_cursor_get_trail(PyObject* self_pobj, PyObject* trail_id_pobj);
-static void ctraildb_Event_del(PyObject* self_pobj);
+ctraildb_TrailDBCursor_iter(PyObject* self_pobj);
+static PyObject *
+ctraildb_TrailDBCursor_iternext(PyObject* self_pobj);
+
+// methods for TrailDB
+static PyObject *
+ctraildb_TrailDB_trails(PyObject* self_pobj, PyObject* dummy);
+static PyObject *
+ctraildb_TrailDB_get_uuid(PyObject* self_pobj, PyObject* arg);
+static PyObject *
+ctraildb_TrailDB_get_trail_id(PyObject* self_pobj, PyObject* arg);
+static PyObject *
+ctraildb_TrailDB_num_trails(PyObject* self_pobj, void* dummy);
+static Py_ssize_t ctraildb_TrailDB_sq_length(PyObject* self_pobj);
+static PyObject *
+ctraildb_TrailDB_cursor(PyObject* self_pobj, PyObject* arg);
+
+// methods for TrailDBCursor
+static PyObject *
+ctraildb_TrailDBCursor_get_trail(PyObject* self_pobj, PyObject* trail_id_pobj);
+static PyObject *
+ctraildb_TrailDBEvent_getattro(PyObject* self_pobj, PyObject* attr_name);
+
+// misc functions
 static signed long
 load_to_attr_cache(TrailDBEventObject* self, PyObject* attr_name);
-static PyObject *
-ctraildb_Event_getattro(PyObject* self_pobj, PyObject* attr_name);
-static void ctraildb_FieldAttrs_del(PyObject* self);
 
-static PyMethodDef ctraildb_cursor_methods[] = {
+// Static definitions
+static PyGetSetDef ctraildb_TrailDB_getsets[] = {
+    { .name = "num_trails",
+      .get = ctraildb_TrailDB_num_trails },
+    NULL
+};
+
+static PyMethodDef ctraildb_TrailDBCursor_methods[] = {
     { .ml_name = "get_trail",
       .ml_flags = METH_O,
-      .ml_meth = ctraildb_cursor_get_trail,
+      .ml_meth = ctraildb_TrailDBCursor_get_trail,
       .ml_doc = "Set the cursor to a certain trail in the TrailDB"
     },
     NULL,
@@ -82,18 +121,18 @@ static PyTypeObject TrailDBCursorType = {
     .tp_itemsize = 0,
     .tp_flags = Py_TPFLAGS_DEFAULT,
     .tp_new = PyType_GenericNew,
-    .tp_init = ctraildb_TrailDBCursor,
-    .tp_dealloc = ctraildb_delCursor,
-    .tp_iter = ctraildb_iter,
-    .tp_iternext = ctraildb_iternext,
-    .tp_methods = ctraildb_cursor_methods,
+    .tp_init = ctraildb_TrailDBCursor_init,
+    .tp_dealloc = ctraildb_TrailDBCursor_del,
+    .tp_iter = ctraildb_TrailDBCursor_iter,
+    .tp_iternext = ctraildb_TrailDBCursor_iternext,
+    .tp_methods = ctraildb_TrailDBCursor_methods,
 };
 
 static PyTypeObject TrailDBTrailsIteratorType = {
     PyVarObject_HEAD_INIT(NULL, 0)
     .tp_name = "ctraildb.TrailDBTrailsIterator",
     .tp_doc = "Iterator over all trails in a TrailDB",
-    .tp_basicsize = sizeof(TrailDBTrailsIterator),
+    .tp_basicsize = sizeof(TrailDBTrailsIteratorObject),
     .tp_itemsize = 0,
     .tp_flags = Py_TPFLAGS_DEFAULT,
     .tp_new = PyType_GenericNew,
@@ -110,8 +149,8 @@ static PyTypeObject TrailDBEventType = {
     .tp_itemsize = 0,
     .tp_flags = Py_TPFLAGS_DEFAULT,
     .tp_new = PyType_GenericNew,
-    .tp_dealloc = ctraildb_Event_del,
-    .tp_getattro = ctraildb_Event_getattro,
+    .tp_dealloc = ctraildb_TrailDBEvent_del,
+    .tp_getattro = ctraildb_TrailDBEvent_getattro,
 };
 
 static PyTypeObject TrailDBFieldAttrsType = {
@@ -122,17 +161,54 @@ static PyTypeObject TrailDBFieldAttrsType = {
     .tp_itemsize = 0,
     .tp_flags = Py_TPFLAGS_DEFAULT,
     .tp_new = PyType_GenericNew,
-    .tp_dealloc = ctraildb_FieldAttrs_del,
+    .tp_dealloc = ctraildb_TrailDBFieldAttrs_del,
     .tp_getattro = PyObject_GenericGetAttr,
     .tp_setattro = PyObject_GenericSetAttr,
     .tp_dictoffset = -sizeof(PyDictObject*),
 };
 
-static PyObject *
-ctraildb_iter(PyObject* self_pobj);
+static PyMethodDef ctraildb_TrailDB_methods[] = {
+    { .ml_name = "trails",
+      .ml_meth = ctraildb_TrailDB_trails,
+      .ml_flags = METH_NOARGS,
+      .ml_doc = "Return an iterator over all trails in the TrailDB." },
+    { .ml_name = "get_uuid",
+      .ml_flags = METH_O,
+      .ml_meth = ctraildb_TrailDB_get_uuid,
+      .ml_doc = "Get the UUID of some Trail ID." },
+    { .ml_name = "get_trail_id",
+      .ml_flags = METH_O,
+      .ml_meth = ctraildb_TrailDB_get_trail_id,
+      .ml_doc = "Get the ID of some UUID. Raises IndexError if it's not in TrailDB." },
+    { .ml_name = "cursor",
+      .ml_flags = METH_NOARGS,
+      .ml_meth = ctraildb_TrailDB_cursor,
+      .ml_doc = "Creates a cursor for this TrailDB." },
+    NULL
+};
+
+static PySequenceMethods TrailDBSequenceMethods = {
+    .sq_length = ctraildb_TrailDB_sq_length,
+};
+
+static PyTypeObject TrailDBObjectType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name = "ctraildb.TrailDB",
+    .tp_doc = "TrailDB handle",
+    .tp_basicsize = sizeof(TrailDBObject),
+    .tp_itemsize = 0,
+    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_new = PyType_GenericNew,
+    .tp_init = ctraildb_TrailDB_init,
+    .tp_dealloc = ctraildb_TrailDB_del,
+    .tp_getset = ctraildb_TrailDB_getsets,
+    .tp_methods = ctraildb_TrailDB_methods,
+    .tp_as_sequence = &TrailDBSequenceMethods,
+};
+
 
 static PyObject *
-ctraildb_Event_getattro(PyObject* self_pobj, PyObject* attr_name)
+ctraildb_TrailDBEvent_getattro(PyObject* self_pobj, PyObject* attr_name)
 {
     signed long field_id = -1;
     TrailDBEventObject* self = (TrailDBEventObject*) self_pobj;
@@ -167,7 +243,7 @@ ctraildb_Event_getattro(PyObject* self_pobj, PyObject* attr_name)
         break;
         default:
         {
-            field_id -= 2;
+            field_id -= 3;
             size_t len;
             const char* val = tdb_get_item_value(self->t->t, self->items[field_id], &len);
             return PyBytes_FromStringAndSize(val, len);
@@ -197,8 +273,8 @@ load_to_attr_cache(TrailDBEventObject* self, PyObject* attr_name)
         return 1;
     }
     TrailDBObject* t = self->t;
-    for (int i = 0; i < t->num_fields-1; ++i) {
-        if (!strcmp(tdb_get_field_name(t->t, (tdb_field) i+1), attr_name_cstr)) {
+    for (int i = 0; i < (int) t->num_fields-1; ++i) {
+        if (!strcmp(tdb_get_field_name(t->t, (tdb_field) i), attr_name_cstr)) {
             PyObject* val = PyLong_FromLong((long) (i+2));
             if (!val) {
                 return -1;
@@ -212,11 +288,11 @@ load_to_attr_cache(TrailDBEventObject* self, PyObject* attr_name)
     char errstr[500];
     snprintf(errstr, 499, "No such field in TrailDB: '%s'", attr_name_cstr);
     errstr[499] = 0;
-    PyErr_SetString(PyExc_KeyError, errstr);
+    PyErr_SetString(PyExc_AttributeError, errstr);
     return -1;
 }
 
-static void ctraildb_Event_del(PyObject* self_pobj)
+static void ctraildb_TrailDBEvent_del(PyObject* self_pobj)
 {
     TrailDBEventObject* self = (TrailDBEventObject*) self_pobj;
     if (self->items) {
@@ -230,7 +306,7 @@ static void ctraildb_Event_del(PyObject* self_pobj)
     PyObject_Del(self_pobj);
 }
 
-static void ctraildb_FieldAttrs_del(PyObject* self_pobj)
+static void ctraildb_TrailDBFieldAttrs_del(PyObject* self_pobj)
 {
     TrailDBFieldAttrsObject* self = (TrailDBFieldAttrsObject*) self_pobj;
     if (self->attrs) {
@@ -240,7 +316,7 @@ static void ctraildb_FieldAttrs_del(PyObject* self_pobj)
 }
 
 static void
-ctraildb_del(PyObject *self_pobj)
+ctraildb_TrailDB_del(PyObject *self_pobj)
 {
     TrailDBObject* self = (TrailDBObject*) self_pobj;
     tdb* t = NULL;
@@ -257,7 +333,7 @@ ctraildb_del(PyObject *self_pobj)
 }
 
 static int
-ctraildb_TrailDB(PyObject *self_pobj, PyObject *args, PyObject* kwds)
+ctraildb_TrailDB_init(PyObject *self_pobj, PyObject *args, PyObject* kwds)
 {
     static char* kwlist[] = {"path", NULL};
     TrailDBObject* self = (TrailDBObject*) self_pobj;
@@ -301,7 +377,7 @@ ctraildb_TrailDB(PyObject *self_pobj, PyObject *args, PyObject* kwds)
 }
 
 static PyObject *
-ctraildb_num_trails(PyObject* self_pobj, void* dummy)
+ctraildb_TrailDB_num_trails(PyObject* self_pobj, void* dummy)
 {
     TrailDBObject* self = (TrailDBObject*) self_pobj;
     if (!self->t) {
@@ -312,12 +388,6 @@ ctraildb_num_trails(PyObject* self_pobj, void* dummy)
     return Py_BuildValue("K", (unsigned long long) count);
 }
 
-static PyGetSetDef ctraildb_getsets[] = {
-    { .name = "num_trails",
-      .get = ctraildb_num_trails },
-    NULL
-};
-
 static PyObject *
 ctraildb_TrailDB_trails(PyObject* self_pobj, PyObject* dummy)
 {
@@ -326,7 +396,7 @@ ctraildb_TrailDB_trails(PyObject* self_pobj, PyObject* dummy)
         PyErr_SetString(PyExc_ValueError, "Cannot read num_trails: TrailDB has been closed.");
         return NULL;
     }
-    TrailDBTrailsIterator* pobj = (TrailDBTrailsIterator*) PyObject_New(TrailDBTrailsIterator, (PyTypeObject*) &TrailDBTrailsIteratorType);
+    TrailDBTrailsIteratorObject* pobj = (TrailDBTrailsIteratorObject*) PyObject_New(TrailDBTrailsIteratorObject, (PyTypeObject*) &TrailDBTrailsIteratorType);
     if (!pobj)
         return NULL;
     TrailDBCursorObject* c = (TrailDBCursorObject*) PyObject_New(TrailDBCursorObject, &TrailDBCursorType);
@@ -360,7 +430,7 @@ ctraildb_TrailDB_get_uuid(PyObject* self_pobj, PyObject* arg)
     if (trail_id == -1 && PyErr_Occurred()) {
         return NULL;
     }
-    if (trail_id < 0 || trail_id >= self->num_trails) {
+    if (trail_id < 0 || trail_id >= (signed long) self->num_trails) {
         PyErr_SetString(PyExc_ValueError, "Trail ID is outside of range.");
         return NULL;
     }
@@ -370,17 +440,60 @@ ctraildb_TrailDB_get_uuid(PyObject* self_pobj, PyObject* arg)
     return PyBytes_FromStringAndSize((char*) hexuuid, 32);
 }
 
-static PyMethodDef ctraildb_methods[] = {
-    { .ml_name = "trails",
-      .ml_meth = ctraildb_TrailDB_trails,
-      .ml_flags = METH_NOARGS,
-      .ml_doc = "Return an iterator over all trails in the TrailDB." },
-    { .ml_name = "get_uuid",
-      .ml_flags = METH_O,
-      .ml_meth = ctraildb_TrailDB_get_uuid,
-      .ml_doc = "Get the UUID of some Trail ID." },
-    NULL
-};
+static PyObject *
+ctraildb_TrailDB_get_trail_id(PyObject* self_pobj, PyObject* arg)
+{
+    TrailDBObject* self = (TrailDBObject*) self_pobj;
+    char* uuid_raw;
+    Py_ssize_t uuid_len;
+    if (PyBytes_AsStringAndSize(arg, &uuid_raw, &uuid_len) < 0) {
+        return NULL;
+    }
+    if (uuid_len != 32) {
+        PyErr_SetString(PyExc_ValueError, "Given UUID does not is not 32 bytes in its hex-encoded form.");
+        return NULL;
+    }
+
+    uint8_t uuid16[16];
+    tdb_error err = tdb_uuid_raw((uint8_t*) uuid_raw, uuid16);
+    if (err != TDB_ERR_OK) {
+        PyErr_SetString(PyExc_ValueError, "Given UUID is not valid hex string.");
+        return NULL;
+    }
+    uint64_t trail_id;
+    err = tdb_get_trail_id(self->t, uuid16, &trail_id);
+    if (err != TDB_ERR_OK) {
+        PyErr_SetString(PyExc_IndexError, "Cannot find UUID in TrailDB.");
+        return NULL;
+    }
+    return PyLong_FromUnsignedLongLong((unsigned long long) trail_id);
+}
+
+static PyObject *
+ctraildb_TrailDB_cursor(PyObject* self_pobj, PyObject* arg)
+{
+    TrailDBObject* self = (TrailDBObject*) self_pobj;
+    TrailDBCursorObject* c = PyObject_New(TrailDBCursorObject, &TrailDBCursorType);
+    if (!c)
+        return NULL;
+
+    tdb_cursor* cur = tdb_cursor_new(self->t);
+    if (!cur) {
+        Py_DECREF(c);
+        PyErr_SetString(PyExc_MemoryError, "Not enough memory to allocate 'TrailDBCursor' object.");
+        return NULL;
+    }
+
+    Py_INCREF(self);
+    c->t = self;
+    c->c = cur;
+    c->exhausted = 1;
+    c->trail_id = 0;
+    return (PyObject*) c;
+}
+
+
+// Function implementations.
 
 static Py_ssize_t ctraildb_TrailDB_sq_length(PyObject* self_pobj)
 {
@@ -392,29 +505,10 @@ static Py_ssize_t ctraildb_TrailDB_sq_length(PyObject* self_pobj)
     return tdb_num_trails(self->t);
 }
 
-static PySequenceMethods TrailDBSequenceMethods = {
-    .sq_length = ctraildb_TrailDB_sq_length,
-};
-
-static PyTypeObject TrailDBObjectType = {
-    PyVarObject_HEAD_INIT(NULL, 0)
-    .tp_name = "ctraildb.TrailDB",
-    .tp_doc = "TrailDB handle",
-    .tp_basicsize = sizeof(TrailDBObject),
-    .tp_itemsize = 0,
-    .tp_flags = Py_TPFLAGS_DEFAULT,
-    .tp_new = PyType_GenericNew,
-    .tp_init = ctraildb_TrailDB,
-    .tp_dealloc = ctraildb_del,
-    .tp_getset = ctraildb_getsets,
-    .tp_methods = ctraildb_methods,
-    .tp_as_sequence = &TrailDBSequenceMethods,
-};
-
 static PyObject *
 ctraildb_TrailDBTrailsIterator_iter(PyObject* self_pobj)
 {
-    TrailDBTrailsIterator* self = (TrailDBTrailsIterator*) self_pobj;
+    TrailDBTrailsIteratorObject* self = (TrailDBTrailsIteratorObject*) self_pobj;
     self->trail_id = 0;
     self->c->trail_id = 0;
     Py_INCREF(self);
@@ -424,7 +518,7 @@ ctraildb_TrailDBTrailsIterator_iter(PyObject* self_pobj)
 static PyObject *
 ctraildb_TrailDBTrailsIterator_iternext(PyObject* self_pobj)
 {
-    TrailDBTrailsIterator* self = (TrailDBTrailsIterator*) self_pobj;
+    TrailDBTrailsIteratorObject* self = (TrailDBTrailsIteratorObject*) self_pobj;
     if (self->trail_id < self->t->num_trails) {
         self->c->trail_id = self->trail_id;
         self->trail_id++;
@@ -443,7 +537,7 @@ ctraildb_TrailDBTrailsIterator_iternext(PyObject* self_pobj)
 static void
 ctraildb_TrailDBTrailsIterator_del(PyObject* self_pobj)
 {
-    TrailDBTrailsIterator* self = (TrailDBTrailsIterator*) self_pobj;
+    TrailDBTrailsIteratorObject* self = (TrailDBTrailsIteratorObject*) self_pobj;
     if (self->c) {
         Py_DECREF(self->c);
         self->c = NULL;
@@ -456,7 +550,7 @@ ctraildb_TrailDBTrailsIterator_del(PyObject* self_pobj)
 }
 
 static void
-ctraildb_delCursor(PyObject *self_pobj)
+ctraildb_TrailDBCursor_del(PyObject *self_pobj)
 {
     TrailDBCursorObject* self = (TrailDBCursorObject*) self_pobj;
     if (self->c) {
@@ -471,7 +565,7 @@ ctraildb_delCursor(PyObject *self_pobj)
 }
 
 static int
-ctraildb_TrailDBCursor(PyObject *self_pobj, PyObject *args, PyObject* kwds)
+ctraildb_TrailDBCursor_init(PyObject *self_pobj, PyObject *args, PyObject* kwds)
 {
     static char* kwlist[] = {"traildb", NULL};
     TrailDBCursorObject* self = (TrailDBCursorObject*) self_pobj;
@@ -495,7 +589,7 @@ ctraildb_TrailDBCursor(PyObject *self_pobj, PyObject *args, PyObject* kwds)
 }
 
 static PyObject *
-ctraildb_iter(PyObject* self_pobj)
+ctraildb_TrailDBCursor_iter(PyObject* self_pobj)
 {
     TrailDBCursorObject* self = (TrailDBCursorObject*) self_pobj;
     self->exhausted = 0;
@@ -516,7 +610,7 @@ ctraildb_iter(PyObject* self_pobj)
 }
 
 static PyObject *
-ctraildb_iternext(PyObject* self_pobj)
+ctraildb_TrailDBCursor_iternext(PyObject* self_pobj)
 {
     TrailDBCursorObject* self = (TrailDBCursorObject*) self_pobj;
     const tdb_event* ev = tdb_cursor_next(self->c);
@@ -547,7 +641,7 @@ ctraildb_iternext(PyObject* self_pobj)
 }
 
 static PyObject *
-ctraildb_cursor_get_trail(PyObject* self_pobj, PyObject* trail_id_pobj)
+ctraildb_TrailDBCursor_get_trail(PyObject* self_pobj, PyObject* trail_id_pobj)
 {
     TrailDBCursorObject* self = (TrailDBCursorObject*) self_pobj;
     long long tid = PyLong_AsLongLong(trail_id_pobj);
