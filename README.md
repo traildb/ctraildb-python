@@ -16,6 +16,9 @@ for uuid, trails in t.trails():
         print(events.uuid, events.time, events.ip)
 ```
 
+These bindings are much faster than `traildb-python` for scanning tasks, unless
+you are using `pypy` (in which case performance gets worse).
+
 Not implemented:
 
   * Constructing TrailDBs
