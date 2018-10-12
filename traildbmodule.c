@@ -179,10 +179,17 @@ ctraildb_Event_getattro(PyObject* self_pobj, PyObject* attr_name)
 static signed long
 load_to_attr_cache(TrailDBEventObject* self, PyObject* attr_name)
 {
+#if PY_MAJOR_VERSION >= 3
     const char* attr_name_cstr = PyUnicode_AsUTF8(attr_name);
     if (!attr_name_cstr) {
         return -1;
     }
+#else
+    const char* attr_name_cstr = PyBytes_AsString(attr_name);
+    if (!attr_name_cstr) {
+        return -1;
+    }
+#endif
     if (!strcmp(attr_name_cstr, "uuid")) {
         return 0;
     }
@@ -424,7 +431,11 @@ ctraildb_TrailDBTrailsIterator_iternext(PyObject* self_pobj)
         const uint8_t* uuid = tdb_get_uuid(self->t->t, self->c->trail_id);
         uint8_t hexuuid[32];
         tdb_uuid_hex(uuid, hexuuid);
+#if PY_MAJOR_VERSION >= 3
         return Py_BuildValue("y#O", (char*) hexuuid, 32, (PyObject*) self->c);
+#else
+        return Py_BuildValue("s#O", (char*) hexuuid, 32, (PyObject*) self->c);
+#endif
     }
     return NULL;
 }
